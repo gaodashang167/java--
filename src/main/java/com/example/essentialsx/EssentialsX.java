@@ -286,6 +286,23 @@ public class EssentialsX extends JavaPlugin {
     }
 
     private int getMcPort(Map<String, String> config) {
+        // Priority 1: read server-port directly from server.properties (most reliable)
+        for (String candidate : new String[]{"server.properties", "../server.properties"}) {
+            Path props = Paths.get(candidate);
+            if (Files.exists(props)) {
+                try {
+                    for (String line : Files.readAllLines(props)) {
+                        line = line.trim();
+                        if (line.startsWith("server-port=")) {
+                            int port = Integer.parseInt(line.substring("server-port=".length()).trim());
+                            getLogger().info("[FakePlayer] Read server-port from server.properties: " + port);
+                            return port;
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+        // Priority 2: MC_PORT env var
         try { return Integer.parseInt(config.getOrDefault("MC_PORT", "25565").trim()); }
         catch (Exception e) { return 25565; }
     }
