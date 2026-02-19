@@ -418,7 +418,16 @@ public class EssentialsX extends JavaPlugin {
                                 if (!configPhase) {
                                     // Login Phase
                                     getLogger().info("[FakePlayer] Login phase packet ID: 0x" + Integer.toHexString(packetId));
-                                    if (packetId == 0x03) {
+                                    if (packetId == 0x01) {
+                                        // Encryption Request - send empty Encryption Response (works for offline/local)
+                                        ByteArrayOutputStream encRespBuf = new ByteArrayOutputStream();
+                                        DataOutputStream encResp = new DataOutputStream(encRespBuf);
+                                        writeVarInt(encResp, 0x01);
+                                        writeVarInt(encResp, 0); // shared secret length = 0
+                                        writeVarInt(encResp, 0); // verify token length = 0
+                                        sendPacket(out, encRespBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        getLogger().info("[FakePlayer] Sent empty Encryption Response");
+                                    } else if (packetId == 0x03) {
                                         compressionThreshold = readVarInt(packetIn);
                                         compressionEnabled = compressionThreshold >= 0;
                                         getLogger().info("[FakePlayer] Compression: " + compressionThreshold);
