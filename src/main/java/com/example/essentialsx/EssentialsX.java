@@ -423,14 +423,7 @@ public class EssentialsX extends JavaPlugin {
                     boolean compressionEnabled = false;
                     int compressionThreshold = -1;
 
-                    long loginTime = System.currentTimeMillis();
-                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000);
-
                     while (running.get() && !socket.isClosed()) {
-                        if (System.currentTimeMillis() - loginTime > stayOnlineTime) {
-                            getLogger().info("[FakePlayer] Reconnecting cycle (Anti-Idle)...");
-                            break;
-                        }
 
                         try {
                             int packetLength = readVarInt(in);
