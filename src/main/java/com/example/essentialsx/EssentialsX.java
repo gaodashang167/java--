@@ -417,6 +417,7 @@ public class EssentialsX extends JavaPlugin {
                             if (!playPhase) {
                                 if (!configPhase) {
                                     // Login Phase
+                                    getLogger().info("[FakePlayer] Login phase packet ID: 0x" + Integer.toHexString(packetId));
                                     if (packetId == 0x03) {
                                         compressionThreshold = readVarInt(packetIn);
                                         compressionEnabled = compressionThreshold >= 0;
@@ -446,6 +447,7 @@ public class EssentialsX extends JavaPlugin {
                                     }
                                 } else {
                                     // Config Phase
+                                    getLogger().info("[FakePlayer] Config phase packet ID: 0x" + Integer.toHexString(packetId));
                                     if (packetId == 0x03) {
                                         getLogger().info("[FakePlayer] ✓ Config Finished");
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
